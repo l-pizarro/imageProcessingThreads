@@ -1,9 +1,16 @@
 #include "image_processing.h"
 
+//Entradas: No posee entradas
+//Funcionamiento: Es la encargada de solicitar memoria para un puntero a la estructura que albergará una imagen PNG.
+//Salidas: ImageStorage* es un puntero a un espacio de memoria destinado a albergar una imagen PNG.
 ImageStorage* createImageStorage() {
     return (ImageStorage*)calloc(1, sizeof(ImageStorage));
 }
 
+
+//Entradas: ImageStorage* image -> Corresponde a un puntero a una estructura que contiene una imagen PNG.
+//Funcionamiento: Transforma la estructura de imagen PNG a una matriz de números enteros.
+//Salidas: int** matriz de punteros que representa a cada pixel de la imagen.
 int** imageToInt(ImageStorage* image) {
     png_bytepp  rows            = png_get_rows (image->png_ptr, image->info_ptr);
     int         rowbytes        = png_get_rowbytes (image->png_ptr, image->info_ptr);
@@ -28,6 +35,12 @@ int** imageToInt(ImageStorage* image) {
     return image_matrix;
 }
 
+//Entradas: ThreadContext* thread -> Corresponde al "contexto" de una hebra. Contiene su identificador, la cantidad de 
+//                            filas que debe procesar, entre otros datos importantes.
+//Funcionamiento: Cuando una hebra entra a esta función, se aplica la matriz de convolución a las filas a cargo
+//                de esa hebra.
+//Salidas: float** matriz de flotantes que representa a la sección de la imagen que cada hebra procesa, tras 
+//         aplicar la matriz de convolución.
 float** applyConvolution(ThreadContext* thread) {   
     int** conv_matrix = (int**)calloc(3, sizeof(int*));
 
@@ -40,13 +53,6 @@ float** applyConvolution(ThreadContext* thread) {
 
     if (! file_matrix){
         perror("Error opening file. Quitting...");
-        
-        for (int i = 0; i < 3; i++)
-        {
-            // free(conv_matrix[i]);
-        }
-        // free(conv_matrix);
-        exit(1);
     }
 
     int row = 0;
@@ -85,6 +91,12 @@ float** applyConvolution(ThreadContext* thread) {
     return filtered_matrix;
 }
 
+//Entradas: ThreadContext* thread -> Corresponde al "contexto" de una hebra. Contiene su identificador, la cantidad de 
+//                            filas que debe procesar, entre otros datos importantes.
+//          float** convolvedMatrix -> Matriz de flotantes que corresponde a la porción que una hebra ya filtró.
+//Funcionamiento: Dentro de la porción de la imagen, cada hebra rectifica la porción que le corresponde.
+//Salidas: float** matriz de flotantes que representa a la sección de la imagen que cada hebra procesa, tras 
+//         rectificar.
 float** rectification(ThreadContext* thread, float** convolvedMatrix) {
     for (int i = 0; i < thread->rowsToRead; i++){
         for (int j = 0; j < thread->colsAmount; j++){
@@ -97,6 +109,10 @@ float** rectification(ThreadContext* thread, float** convolvedMatrix) {
     return convolvedMatrix;
 }
 
+//Entradas: float* array -> Arreglo de flotantes en donde se buscará el número mayor.
+//          int len -> Corresponde al largo del arreglo.
+//Funcionamiento: Se busca el número mayor dentro de un arreglo de flotantes.
+//Salidas: float número flotante que es el mayor dentro del arreglo.
 float findMax(float* array, int len) {
     float max = array[0];
     for (int i = 0; i < len; i++) {
@@ -107,18 +123,19 @@ float findMax(float* array, int len) {
     return max;
 }
 
+//Entradas: ThreadContext* thread -> Corresponde al "contexto" de una hebra. Contiene su identificador, la cantidad de 
+//                            filas que debe procesar, entre otros datos importantes.
+//          float** rectificatedMatrix -> Matriz de flotantes que corresponde a la porción que una hebra ya rectificó.
+//          int* pooledRows -> Paso por referencia que permite saber fuera de la función, la cantidad de filas
+//                             que pasaron por el pooling.
+//          int* pooledCols -> Paso por referencia que permite saber fuera de la función, la cantidad de columnas
+//                             que pasaron por el pooling.
+//Funcionamiento: Dentro de la porción de la imagen, cada hebra rectifica la porción que le corresponde.
+//Salidas: float** matriz de flotantes que representa a la sección de la imagen que cada hebra procesa, tras 
+//         hacer el 'pooling'.
 float** pooling(ThreadContext* thread, float** rectificatedMatrix, int* pooledRows, int* pooledCols) {
     int rows = thread->rowsToRead/3;
     int cols = thread->colsAmount/3;
-    
-    // Add one more column if its amounth is not multiple of 3
-    // if (thread->colsAmount%3 == 1) {
-    //     cols = (thread->colsAmount/3) + 2;
-    // }
-
-    // if (thread->colsAmount%3 == 2) {
-    //     cols = (thread->colsAmount/3) + 1;
-    // }
 
     if (thread->colsAmount%3 != 0) {
         cols = (thread->colsAmount/3) + 1;
@@ -148,7 +165,6 @@ float** pooling(ThreadContext* thread, float** rectificatedMatrix, int* pooledRo
             nineValues[7] = rectificatedMatrix[(rowIter*3) + 2][(colIter*3 + 1) % thread->colsAmount];
             nineValues[8] = rectificatedMatrix[(rowIter*3) + 2][(colIter*3 + 2) % thread->colsAmount];
             pooledSubmatrix[rowIter][colIter] = findMax(nineValues, 9);
-            // free(nineValues);
         }
     }
 

@@ -1,3 +1,5 @@
+/*
+
 #ifdef __APPLE__
 
 #ifndef PTHREAD_BARRIER_H_
@@ -66,3 +68,5 @@ int pthread_barrier_wait(pthread_barrier_t *barrier)
 
 #endif // PTHREAD_BARRIER_H_
 #endif // __APPLE__
+
+*/

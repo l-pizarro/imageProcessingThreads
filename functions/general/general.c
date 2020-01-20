@@ -9,7 +9,9 @@ int minLevel = 0;
 int underLevel = 0;
 int total = 0;
 
-
+//Entradas: int tvalue -> Cantidad de filas y columnas a leer. Tamaño del buffer.
+//Funcionamiento: Crea una hebra "master" que llena el buffer, a partir de una imagen PNG.
+//Salidas: No retorna.
 void notifyTheFiller(int tvalue) {
     matrix_buffer = (int**)calloc(tvalue, sizeof(int*));
     for (int i=0; i<tvalue; i++)
@@ -22,10 +24,12 @@ void notifyTheFiller(int tvalue) {
     pthread_join(master, NULL);
 }
 
+//Entradas: void* tvalue -> Tamaño del buffer. Llega como void*, por requerimiento de hebras. Luego es casteado a int.
+//Funcionamiento: Se lee la imagen PNG, para posteriormente, a partir de una matriz de enteros, copiar
+//                la porción solicitada dentro del buffer.
+//Salidas: No retorna.
 void * fillBuffer(void* tvalue) {
     int size = (int) tvalue;
-
-    // printf("Tengo que llenar el buffer, con este tamaño: %d\n", size);
 
     char filename[200];
     sprintf(filename, "testImages/imagen_%d.png", img_to_read);
@@ -77,6 +81,15 @@ void * fillBuffer(void* tvalue) {
     return NULL;
 }
 
+//Entradas: ThreadContext* thread -> Corresponde al "contexto" de una hebra. Contiene su identificador,  
+//                                   la cantidad de filas que debe procesar, entre otros datos importantes.
+//          float** pooled -> Matriz de flotantes que corresponde a la porción que una hebra ya pasó por el 
+//                            proceso de pooling.
+//          int rows -> Cantidad de filas en la matriz.
+//          int cols -> Cantidad de columnas en la matriz.
+//Funcionamiento: Se copia la porción de cada hebra, en una matriz más grande, que contiene el resultado
+//                general, considerando a todas las hebras.
+//Salidas: no retorna
 void fillFinalMatrix(ThreadContext* thread, float** pooled, int rows, int cols){
     int z = 0;
     for (int i = thread->identifier * rows; i < (thread->identifier + 1) * rows; i++, z++){
@@ -86,34 +99,47 @@ void fillFinalMatrix(ThreadContext* thread, float** pooled, int rows, int cols){
     }
 }
 
+//Entradas: void* param -> Puntero al contexto de la hebra. Llega como void*, por requerimiento de hebras.
+//                         Luego es casteado a ThreadContext*
+//Funcionamiento: Función que permite sincronizar el funcionamiento de cada hebra.
+//Salidas: No retorna.
 void* syncThreads(void* param) {
     ThreadContext* threadContext = (ThreadContext*) param;
     reader(threadContext);
+
     pthread_barrier_wait(&barriers[0]);
+    
     float** convolvedMatrix = applyConvolution(threadContext);
-    // printf("Hebra %d: Ya filtró la imagen\n", threadContext->identifier);
+    
     pthread_barrier_wait(&barriers[1]);
+    
     float** rectificated = rectification(threadContext, convolvedMatrix);
-    // printf("Hebra %d: Ya rectificó la imagen\n", threadContext->identifier);
+    
     pthread_barrier_wait(&barriers[2]);
+    
     int rows;
     int cols;
     float** pooled = pooling(threadContext, rectificated, &rows, &cols);
-    // printf("Hebra %d: Ya agrupó la imagen [%d][%d]\n", threadContext->identifier, rows, cols);
+    
     pthread_barrier_wait(&barriers[3]);
+    //Here starts critic zone
     pthread_mutex_lock(&mutex);
     int underLevelPixels = countUnderLevel(pooled, rows, cols);
     underLevel += underLevelPixels;
     total += rows*cols;
     pthread_mutex_unlock(&mutex);
+    //Here ends critic zone
     fillFinalMatrix(threadContext, pooled, rows, cols);
-    // printf("Hebra %d: Encontró %d pixeles bajo el umbral, de un total de %d\n", threadContext->identifier, underLevelPixels, rows*cols);
+    
     pthread_barrier_wait(&barriers[4]);
+    
     return NULL;
-    //sync all threads
-    //all the other stages.
 }
 
+//Entradas: ThreadContext* thread -> Corresponde al "contexto" de una hebra. Contiene su identificador,  
+//                                   la cantidad de filas que debe procesar, entre otros datos importantes.
+//Funcionamiento: Toma, a partir del buffer, las filas que una hebra tiene que procesar.
+//Salidas: no retorna.
 void reader(ThreadContext* thread) {
     int z = 0;
     for (int i = thread->identifier * thread->rowsToRead; i < (thread->identifier + 1) * thread->rowsToRead, z < thread->rowsToRead; i++, z++){
@@ -123,6 +149,12 @@ void reader(ThreadContext* thread) {
     }
 }
 
+//Entradas: float** pooledMatrix -> Matriz de flotantes que corresponde a la porción que una hebra ya pasó por el 
+//                                  proceso de pooling.
+//          int rows -> Cantidad de filas en la matriz.
+//          int cols -> Cantidad de columnas en la matriz.
+//Funcionamiento: Se determina en cada porción de cada hebra, la cantidad de pixeles negros.
+//Salidas: int cantidad de pixeles encontrados.
 int countUnderLevel(float** pooledMatrix, int rows, int cols) {
     int pixelsUnderLevel = 0;
     for (int i = 0; i < rows; i++) {
@@ -135,8 +167,12 @@ int countUnderLevel(float** pooledMatrix, int rows, int cols) {
     return pixelsUnderLevel;
 }
 
-void save_png_to_file (float** bitmap, int width, int height)
-{
+//Entradas: float** bitmap -> Matriz de flotantes que corresponde a imagen procesada.
+//          int width -> Cantidad de columnas en la matriz.
+//          int height -> Cantidad de filas en la matriz.
+//Funcionamiento: A partir de la matriz procesada, se crea un PNG, el cual posteriormente es guardado en disco.
+//Salidas: no retorna
+void save_png_to_file (float** bitmap, int width, int height){
     FILE * fp;
     png_structp png_ptr = NULL;
     png_infop info_ptr = NULL;
@@ -199,7 +235,7 @@ void save_png_to_file (float** bitmap, int width, int height)
     row_pointers = png_malloc (png_ptr, height * sizeof (png_byte *));
     for (y = 0; y < height; y++) {
         png_byte *row = 
-            png_malloc (png_ptr, sizeof (uint8_t) * width * pixel_size);
+            png_malloc (png_ptr, sizeof (u_int8_t) * width * pixel_size);
         row_pointers[y] = row;
         for (x = 0; x < width; x++) {
             *row++ = bitmap[x][y];
@@ -217,25 +253,39 @@ void save_png_to_file (float** bitmap, int width, int height)
 
     status = 0;
     
-    for (y = 0; y < height; y++) {
-        // png_free (png_ptr, row_pointers[y]);
-    }
-    // png_free (png_ptr, row_pointers);
-    
     fclose (fp);
 }
 
+//Entradas: float percent -> porcentaje de la imagen con pixeles negros
+//          int threshold -> Umbral de negrura
+//Funcionamiento: En caso de que el porcentaje sea menor al umbral, se retorna un "YES", concluyendo que la
+//                imagen es "NEARLY BLACK". De lo contrario, se retorna "NO"
+//Salidas: char* Clasificación determinada.
 char* classification(float percent, int threshold){
     return (percent * 1.0 < threshold) ? "YES" : "NO";
 }
 
+//Entradas: int threshold -> Umbral de negrura
+//          float percent -> porcentaje de la imagen con pixeles negros
+//Funcionamiento: Procedimiento que permite mostrar por STDOUT los resultados, en caso de ser requerido.
+//Salidas: No retorna.
 void showResults(int threshold, float percent){
     if (img_to_read == 1){
-        printf("| NOMBRE IMAGEN | PORCENTAJE NEGRURA | NEARLY BLACK (Umbral en %d) |\n", threshold);
+        printf("| NOMBRE IMAGEN | PORCENTAJE DETERMINADO | NEARLY BLACK (Umbral en %d) |\n", threshold);
     }
-    printf("|   imagen_%d    |     %f%c      |             %s              |\n", img_to_read, percent, 37, classification(percent, threshold));
+    printf("|   imagen_%d    |       %f%c        |             %s              |\n", img_to_read, percent, 37, classification(percent, threshold));
 }
 
+//Entradas: int cvalue -> Cantidad de imagenes a leer
+//          int hvalue -> Cantidad de hebras a crear
+//          int tvalue -> Tamaño del buffer
+//          int nvalue -> Umbral de negrura
+//          char* mvalue -> Nombre del archivo que contiene la matriz de convolución.
+//          int bflag -> "Bandera" que permite determinar si al procesar la imagen se deben mostrar los resultados.
+//Funcionamiento: Es el procedimiento principal. Aquí se crea tanto la hebra "master" para llenar el buffer, 
+//                como también a las hebras esclavas que procesarán la imagen. También llama a la función que
+//                permite la escritura de la imagen PNG, como también si se deben mostrar las conclusiones.
+//Salidas: No retorna.
 void init_pipeline(int cvalue, int hvalue, int tvalue, int nvalue, char* mvalue, int bflag) {  
     img_to_read = cvalue; 
     underLevel = 0;
@@ -288,20 +338,13 @@ void init_pipeline(int cvalue, int hvalue, int tvalue, int nvalue, char* mvalue,
     if (bflag == 1)
         showResults(nvalue, (underLevel/(total*1.0))*100);
 
-    for (int i = 0; i < tvalue; i++){
-        // free(matrix_buffer[i]);
-    }
-    // free(matrix_buffer);
-
-    // printf("La hebra padre determina que un %f%c de los pixeles está por debajo del umbral\n", (underLevel/(total*1.0))*100, 37);
-    // if (img_to_read < cvalue){
-    //     img_to_read++;
-    //     init_pipeline(cvalue, hvalue, tvalue, nvalue, mvalue, bflag);
-    // }
-
     return;
 }
 
+//Entradas: int argc -> Corresponde a la cantidad argumentos enviados a través de la entrada estándar
+//          char** argv -> Corresponde a un arreglo con los argumentos enviados a través de la entrada estándar
+//Funcionamiento: Es la encargada de recibir los datos desde la ejecución del programa, para comenzar el pipeline
+//Salidas: No retorna.
 void init_program(int argc, char **argv) {
 	int     cvalue = 0;
     int     hvalue = 0;
