@@ -43,9 +43,9 @@ float** applyConvolution(ThreadContext* thread) {
         
         for (int i = 0; i < 3; i++)
         {
-            free(conv_matrix[i]);
+            // free(conv_matrix[i]);
         }
-        free(conv_matrix);
+        // free(conv_matrix);
         exit(1);
     }
 
@@ -112,6 +112,14 @@ float** pooling(ThreadContext* thread, float** rectificatedMatrix, int* pooledRo
     int cols = thread->colsAmount/3;
     
     // Add one more column if its amounth is not multiple of 3
+    // if (thread->colsAmount%3 == 1) {
+    //     cols = (thread->colsAmount/3) + 2;
+    // }
+
+    // if (thread->colsAmount%3 == 2) {
+    //     cols = (thread->colsAmount/3) + 1;
+    // }
+
     if (thread->colsAmount%3 != 0) {
         cols = (thread->colsAmount/3) + 1;
     }
@@ -140,7 +148,7 @@ float** pooling(ThreadContext* thread, float** rectificatedMatrix, int* pooledRo
             nineValues[7] = rectificatedMatrix[(rowIter*3) + 2][(colIter*3 + 1) % thread->colsAmount];
             nineValues[8] = rectificatedMatrix[(rowIter*3) + 2][(colIter*3 + 2) % thread->colsAmount];
             pooledSubmatrix[rowIter][colIter] = findMax(nineValues, 9);
-            free(nineValues);
+            // free(nineValues);
         }
     }
 

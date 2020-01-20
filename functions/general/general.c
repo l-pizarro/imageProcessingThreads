@@ -1,7 +1,9 @@
 #include "general.h"
 
 pthread_barrier_t* barriers;
+pthread_mutex_t mutex;
 int** matrix_buffer;
+float** finalMatrix;
 int img_to_read = 1;
 int minLevel = 0;
 int underLevel = 0;
@@ -23,9 +25,9 @@ void notifyTheFiller(int tvalue) {
 void * fillBuffer(void* tvalue) {
     int size = (int) tvalue;
 
-    printf("Tengo que llenar el buffer, con este tamaño: %d\n", size);
+    // printf("Tengo que llenar el buffer, con este tamaño: %d\n", size);
 
-    char filename[100];
+    char filename[200];
     sprintf(filename, "testImages/imagen_%d.png", img_to_read);
 
     FILE * image_readed;
@@ -75,25 +77,37 @@ void * fillBuffer(void* tvalue) {
     return NULL;
 }
 
+void fillFinalMatrix(ThreadContext* thread, float** pooled, int rows, int cols){
+    int z = 0;
+    for (int i = thread->identifier * rows; i < (thread->identifier + 1) * rows; i++, z++){
+        for (int j = 0; j < cols; j++){
+            finalMatrix[i][j] = pooled[z][j];
+        }
+    }
+}
+
 void* syncThreads(void* param) {
     ThreadContext* threadContext = (ThreadContext*) param;
     reader(threadContext);
     pthread_barrier_wait(&barriers[0]);
     float** convolvedMatrix = applyConvolution(threadContext);
-    printf("Hebra %d: Ya filtró la imagen\n", threadContext->identifier);
+    // printf("Hebra %d: Ya filtró la imagen\n", threadContext->identifier);
     pthread_barrier_wait(&barriers[1]);
     float** rectificated = rectification(threadContext, convolvedMatrix);
-    printf("Hebra %d: Ya rectificó la imagen\n", threadContext->identifier);
+    // printf("Hebra %d: Ya rectificó la imagen\n", threadContext->identifier);
     pthread_barrier_wait(&barriers[2]);
     int rows;
     int cols;
     float** pooled = pooling(threadContext, rectificated, &rows, &cols);
-    printf("Hebra %d: Ya agrupó la imagen [%d][%d]\n", threadContext->identifier, rows, cols);
+    // printf("Hebra %d: Ya agrupó la imagen [%d][%d]\n", threadContext->identifier, rows, cols);
     pthread_barrier_wait(&barriers[3]);
+    pthread_mutex_lock(&mutex);
     int underLevelPixels = countUnderLevel(pooled, rows, cols);
     underLevel += underLevelPixels;
     total += rows*cols;
-    printf("Hebra %d: Encontró %d pixeles bajo el umbral, de un total de %d\n", threadContext->identifier, underLevelPixels, rows*cols);
+    pthread_mutex_unlock(&mutex);
+    fillFinalMatrix(threadContext, pooled, rows, cols);
+    // printf("Hebra %d: Encontró %d pixeles bajo el umbral, de un total de %d\n", threadContext->identifier, underLevelPixels, rows*cols);
     pthread_barrier_wait(&barriers[4]);
     return NULL;
     //sync all threads
@@ -121,7 +135,109 @@ int countUnderLevel(float** pooledMatrix, int rows, int cols) {
     return pixelsUnderLevel;
 }
 
-void init_pipeline(int cvalue, int hvalue, int tvalue, int nvalue, char* mvalue, int bflag) {   
+void save_png_to_file (float** bitmap, int width, int height)
+{
+    FILE * fp;
+    png_structp png_ptr = NULL;
+    png_infop info_ptr = NULL;
+    size_t x, y;
+    png_byte ** row_pointers = NULL;
+    /* "status" contains the return value of this function. At first
+       it is set to a value which means 'failure'. When the routine
+       has finished its work, it is set to a value which means
+       'success'. */
+    int status = -1;
+    /* The following number is set by trial and error only. I cannot
+       see where it it is documented in the libpng manual.
+    */
+    int pixel_size = 3;
+    int depth = 8;
+
+    char* filename;
+    filename = (char*)calloc(200, sizeof(char));
+    sprintf(filename, "output/out_%d.png", img_to_read);
+    
+    fp = fopen (filename, "wb");
+    if (! fp) {
+        perror("fallo apertura archivo");
+        exit(1);
+    }
+
+    png_ptr = png_create_write_struct (PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (png_ptr == NULL) {
+        perror("fallé creando una struct linea 95");
+        exit(1);
+    }
+    
+    info_ptr = png_create_info_struct (png_ptr);
+    if (info_ptr == NULL) {
+        perror("fallé creando una struct linea 101");
+        exit(1);
+    }
+    
+    /* Set up error handling. */
+
+    if (setjmp (png_jmpbuf (png_ptr))) {
+        perror("error en esta cosa");
+        exit(1);
+    }
+    
+    /* Set image attributes. */
+
+    png_set_IHDR (png_ptr,
+                  info_ptr,
+                  width,
+                  height,
+                  depth,
+                  PNG_COLOR_TYPE_RGB,
+                  PNG_INTERLACE_NONE,
+                  PNG_COMPRESSION_TYPE_DEFAULT,
+                  PNG_FILTER_TYPE_DEFAULT);
+    
+    /* Initialize rows of PNG. */
+
+    row_pointers = png_malloc (png_ptr, height * sizeof (png_byte *));
+    for (y = 0; y < height; y++) {
+        png_byte *row = 
+            png_malloc (png_ptr, sizeof (uint8_t) * width * pixel_size);
+        row_pointers[y] = row;
+        for (x = 0; x < width; x++) {
+            *row++ = bitmap[x][y];
+        }
+    }
+    
+    /* Write the image data to "fp". */
+
+    png_init_io (png_ptr, fp);
+    png_set_rows (png_ptr, info_ptr, row_pointers);
+    png_write_png (png_ptr, info_ptr, PNG_TRANSFORM_IDENTITY, NULL);
+
+    /* The routine has successfully written the file, so we set
+       "status" to a value which indicates success. */
+
+    status = 0;
+    
+    for (y = 0; y < height; y++) {
+        // png_free (png_ptr, row_pointers[y]);
+    }
+    // png_free (png_ptr, row_pointers);
+    
+    fclose (fp);
+}
+
+char* classification(float percent, int threshold){
+    return (percent * 1.0 < threshold) ? "YES" : "NO";
+}
+
+void showResults(int threshold, float percent){
+    if (img_to_read == 1){
+        printf("| NOMBRE IMAGEN | PORCENTAJE NEGRURA | NEARLY BLACK (Umbral en %d) |\n", threshold);
+    }
+    printf("|   imagen_%d    |     %f%c      |             %s              |\n", img_to_read, percent, 37, classification(percent, threshold));
+}
+
+void init_pipeline(int cvalue, int hvalue, int tvalue, int nvalue, char* mvalue, int bflag) {  
+    img_to_read = cvalue; 
     underLevel = 0;
     total = 0;
     minLevel = nvalue;
@@ -139,17 +255,23 @@ void init_pipeline(int cvalue, int hvalue, int tvalue, int nvalue, char* mvalue,
     for (int i = 0; i < 5; i++)
         pthread_barrier_init(&barriers[i], NULL, hvalue);
 
+    finalMatrix = (float**)calloc(tvalue, sizeof(float*));
+    for (int i = 0; i < tvalue; i++){
+       finalMatrix[i] = (float*)calloc(tvalue/3, sizeof(float));
+    }
+
     notifyTheFiller(tvalue);
 
     //The master thread has filled the buffer. Now the slaves threads must go to work.
 
     for (int i = 0; i < hvalue; i++){
         ThreadContext* threadContext = (ThreadContext*)calloc(1, sizeof(ThreadContext));
+        pthread_mutex_init(&mutex, NULL);
         threadContext->identifier = i;
         threadContext->rowsToRead = rowsToRead;
         threadContext->colsAmount = tvalue;
         threadContext->rowsToWork = (float**)calloc(rowsToRead, sizeof(float*));
-        threadContext->filter_filename = (char*)calloc(100, sizeof(float*));
+        threadContext->filter_filename = (char*)calloc(200, sizeof(float*));
         strcpy(threadContext->filter_filename, mvalue);
         for (int j = 0; j < rowsToRead; j++)
             threadContext->rowsToWork[j] = (float*)calloc(tvalue, sizeof(float));
@@ -161,16 +283,21 @@ void init_pipeline(int cvalue, int hvalue, int tvalue, int nvalue, char* mvalue,
         pthread_join(thread_array[i], NULL);
     }
 
-    for (int i = 0; i < tvalue; i++){
-        free(matrix_buffer[i]);
-    }
-    free(matrix_buffer);
+    save_png_to_file(finalMatrix, tvalue, tvalue);
 
-    printf("La hebra padre determina que un %f%c de los pixeles está por debajo del umbral\n", (underLevel/(total*1.0))*100, 37);
-    if (img_to_read < cvalue){
-        img_to_read++;
-        init_pipeline(cvalue, hvalue, tvalue, nvalue, mvalue, bflag);
+    if (bflag == 1)
+        showResults(nvalue, (underLevel/(total*1.0))*100);
+
+    for (int i = 0; i < tvalue; i++){
+        // free(matrix_buffer[i]);
     }
+    // free(matrix_buffer);
+
+    // printf("La hebra padre determina que un %f%c de los pixeles está por debajo del umbral\n", (underLevel/(total*1.0))*100, 37);
+    // if (img_to_read < cvalue){
+    //     img_to_read++;
+    //     init_pipeline(cvalue, hvalue, tvalue, nvalue, mvalue, bflag);
+    // }
 
     return;
 }
@@ -181,7 +308,7 @@ void init_program(int argc, char **argv) {
     int     tvalue = 0;
     int     nvalue = 0;
     int     bflag   = 0;
-    char    mvalue[50];
+    char    mvalue[100];
 
     int command;
     opterr = 0;
@@ -241,5 +368,7 @@ void init_program(int argc, char **argv) {
         perror("No pueden haber más hebras que filas en el buffer.");
         exit(1);
     }
-	init_pipeline(cvalue, hvalue, tvalue, nvalue, mvalue, bflag);
+    for (int i = 0; i < cvalue; i++){
+	   init_pipeline(i+1, hvalue, tvalue, nvalue, mvalue, bflag);
+    }
 }
