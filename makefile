@@ -6,3 +6,4 @@ run:
 
 clean:
 	rm lab2
+	rm output/*
